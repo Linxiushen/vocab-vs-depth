@@ -1,0 +1,5 @@
+precision: device_type=cpu requested_dtype=fp32 effective_dtype=float32
+Model Params: 63.91M
+Trainable Params: 63.912M
+packed: /Users/leonskennedy/AI coding open/侧端大模型/lab/data/v3/packed_A n_seq=591462 seq_len=512 tokenizer_sha256=cdd7e5bc16aa5081… doc_order_sha256=7d204f346dc15680…
+packed run: total_updates=7339 tokens_per_update=16352 total_tokens_requested=120000000 schedule=wsd

@@ -55,6 +55,7 @@ PACK_DEFAULTS = {
     "save_steps_frac": 0.05,
     "log_interval": 10,
     "keep_last_n": 0,
+    "resume": 0,
 }
 
 
@@ -89,6 +90,8 @@ if __name__ == "__main__":
     pack_only.add_argument("--log_interval", type=int, default=None)
     pack_only.add_argument("--keep_last_n", type=int, default=None,
                            help="最多保留多少个中途 checkpoint（0=全留，终点永不删）")
+    pack_only.add_argument("--resume", type=int, default=None, choices=[0, 1],
+                           help="从 <out>/weights/pretrain_<hidden>_resume.pt 续训（fp32 权重+optimizer+全部累计量）")
     args = parser.parse_args()
 
     profile = args.profile or ("pack" if args.packed is not None else "check")
@@ -159,9 +162,20 @@ if __name__ == "__main__":
         }
 
     run = args.out.resolve()
-    run.mkdir(parents=True, exist_ok=False)
-    work = run / "work"
-    work.mkdir()
+    if args.resume:
+        # Resuming into the SAME directory on purpose: the trainer's resume state,
+        # the inference checkpoints and the ledger it truncates all live here, and
+        # the run is only meaningful as one record. A fresh directory would give a
+        # second manifest claiming to be a complete run of its own.
+        resume_state = run / "weights" / f"pretrain_{arm['hidden_size']}_resume.pt"
+        if not resume_state.is_file():
+            parser.error(f"--resume 1 but no resume state at {resume_state}")
+        work = run / "work"
+        work.mkdir(exist_ok=True)
+    else:
+        run.mkdir(parents=True, exist_ok=False)
+        work = run / "work"
+        work.mkdir()
 
     if profile == "check":
         data = run / "input.jsonl"
@@ -200,6 +214,7 @@ if __name__ == "__main__":
                    "--save_dir", str(run / "weights"), "--save_weight", "pretrain",
                    "--log_interval", str(args.log_interval),
                    "--packed", str(prefix), "--total_tokens", str(total_tokens),
+                   "--resume", str(args.resume),
                    "--schedule", args.schedule, "--warmup_frac", str(args.warmup_frac),
                    "--decay_frac", str(args.decay_frac), "--lr_floor", str(args.lr_floor),
                    "--grad_clip", str(args.grad_clip), "--dtype", args.dtype,

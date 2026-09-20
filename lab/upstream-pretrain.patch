@@ -1,5 +1,5 @@
 diff --git a/trainer/train_pretrain.py b/trainer/train_pretrain.py
-index 83a0382..2c410f6 100644
+index 83a0382..759379f 100644
 --- a/trainer/train_pretrain.py
 +++ b/trainer/train_pretrain.py
 @@ -6,20 +6,131 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -136,7 +136,7 @@ index 83a0382..2c410f6 100644
  
  def train_epoch(epoch, loader, iters, start_step=0, wandb=None):
      start_time = time.time()
-@@ -80,6 +191,162 @@ def train_epoch(epoch, loader, iters, start_step=0, wandb=None):
+@@ -80,6 +191,267 @@ def train_epoch(epoch, loader, iters, start_step=0, wandb=None):
          optimizer.zero_grad(set_to_none=True)
  
  
@@ -185,7 +185,107 @@ index 83a0382..2c410f6 100644
 +    text_targets_cum = structural_targets_cum = utf8_bytes_cum = 0
 +    started = time.time()
 +    cursor = 0
-+    for update in range(1, total_updates + 1):
++    first_update = 1
++
++    # ---- resume (决策文档 风险表 #2 的缺口) -------------------------------
++    # The packed loop is fully deterministic: `order` is range(seqs_needed) and
++    # `cursor` advances linearly, so a run is completely described by the
++    # optimizer/scaler/model state plus the integer counters below. That makes
++    # resume exact rather than approximate -- no RNG stream to replay.
++    #
++    # This state is NOT the same file as the --save_steps_frac checkpoints:
++    # those hold v.half() inference weights, and resuming from fp16 would
++    # silently restart training at reduced precision. One rolling fp32 file is
++    # overwritten instead of accumulating (~0.77 GB per arm-A run: fp32 params
++    # plus Adam's two moments), so resume costs bounded disk, not 21x it.
++    resume_path = (f'{args.save_dir}/{args.save_weight}_{lm_config.hidden_size}'
++                  f"{'_moe' if lm_config.use_moe else ''}_resume.pt")
++    # Anything that would make the restored state describe a DIFFERENT experiment
++    # has to be part of the identity, or a resume silently splices two runs.
++    run_identity = {
++        'vocab_size': lm_config.vocab_size,
++        'hidden_size': lm_config.hidden_size,
++        'num_hidden_layers': lm_config.num_hidden_layers,
++        'seq_len': dataset.seq_len,
++        'ids_sha256': dataset.meta.get('ids_sha256'),
++        'doc_order_sha256': dataset.meta.get('doc_order_sha256'),
++        'total_updates': total_updates,
++        'tokens_per_update': tokens_per_update,
++        'schedule': args.schedule,
++        'learning_rate': args.learning_rate,
++        'warmup_frac': args.warmup_frac,
++        'decay_frac': args.decay_frac,
++        'lr_floor': args.lr_floor,
++        'grad_clip': args.grad_clip,
++        'batch_size': args.batch_size,
++        'accumulation_steps': args.accumulation_steps,
++        'seed': args.seed,
++    }
++
++    def save_resume(update):
++        raw = model.module if isinstance(model, DistributedDataParallel) else model
++        raw = getattr(raw, '_orig_mod', raw)
++        payload = {
++            'identity': run_identity,
++            'update': update,
++            'cursor': cursor,
++            'seqs_consumed': seqs_consumed,
++            'tokens_cum': tokens_cum,
++            'positions_cum': positions_cum,
++            'text_targets_cum': text_targets_cum,
++            'structural_targets_cum': structural_targets_cum,
++            'utf8_bytes_cum': utf8_bytes_cum,
++            'wall_seconds_cum': time.time() - started,
++            'model': raw.state_dict(),          # fp32, unlike the inference ckpt
++            'optimizer': optimizer.state_dict(),
++            'scaler': scaler.state_dict(),
++        }
++        torch.save(payload, resume_path + '.tmp')
++        os.replace(resume_path + '.tmp', resume_path)
++
++    if args.resume:
++        if not os.path.isfile(resume_path):
++            raise FileNotFoundError(
++                f'--resume 1 but no resume state at {resume_path}. Drop --resume to '
++                'start a fresh run; do not silently restart 14-36 h of training.')
++        state = torch.load(resume_path, map_location='cpu', weights_only=False)
++        mismatch = {k: (v, state['identity'].get(k)) for k, v in run_identity.items()
++                    if state['identity'].get(k) != v}
++        if mismatch:
++            raise ValueError(
++                f'resume state at {resume_path} belongs to a different run: '
++                f'{mismatch} (now vs saved). Splicing two configurations into one '
++                'weight file would produce a checkpoint whose training history is '
++                'unrecoverable.')
++        raw = model.module if isinstance(model, DistributedDataParallel) else model
++        raw = getattr(raw, '_orig_mod', raw)
++        raw.load_state_dict(state['model'], strict=True)
++        optimizer.load_state_dict(state['optimizer'])
++        scaler.load_state_dict(state['scaler'])
++        cursor = state['cursor']
++        seqs_consumed = state['seqs_consumed']
++        tokens_cum = state['tokens_cum']
++        positions_cum = state['positions_cum']
++        text_targets_cum = state['text_targets_cum']
++        structural_targets_cum = state['structural_targets_cum']
++        utf8_bytes_cum = state['utf8_bytes_cum']
++        started = time.time() - state['wall_seconds_cum']
++        first_update = state['update'] + 1
++        if cursor != state['update'] * args.batch_size * args.accumulation_steps:
++            raise AssertionError('resume state cursor disagrees with its update count')
++        # Ledger rows past the restored point describe updates whose weights were
++        # thrown away; keeping them would double-count tokens in the run record.
++        if ledger_path is not None and ledger_path.is_file():
++            rows = [line for line in ledger_path.read_text(encoding='utf-8').splitlines()
++                    if line.strip() and json.loads(line)['step'] <= state['update']]
++            ledger_path.write_text(''.join(line + '\n' for line in rows), encoding='utf-8')
++        Logger(f'resumed from update {state["update"]}/{total_updates} '
++              f'(cursor={cursor}, tokens_cum={tokens_cum})')
++        if first_update > total_updates:
++            Logger('resume state is already at the token budget; nothing to do')
++            return
++
++    for update in range(first_update, total_updates + 1):
 +        step0 = update - 1
 +        if args.schedule == 'wsd':
 +            lr = get_lr_wsd(step0, total_updates, args.learning_rate,
@@ -291,6 +391,11 @@ index 83a0382..2c410f6 100644
 +                kept_checkpoints.append(ckp)
 +                while args.keep_last_n > 0 and len(kept_checkpoints) > args.keep_last_n:
 +                    os.remove(kept_checkpoints.pop(0))
++            # Saved at the same cadence, so a crash costs at most one save
++            # interval. Written after the inference checkpoint: if the process
++            # dies between the two, resume replays that interval rather than
++            # skipping it, which is the safe direction.
++            save_resume(update)
 +
 +    if cursor != seqs_needed:
 +        raise AssertionError('internal: packed sequence cursor did not match the planned consumption')
@@ -299,7 +404,7 @@ index 83a0382..2c410f6 100644
  if __name__ == "__main__":
      parser = argparse.ArgumentParser(description="MiniMind Pretraining")
      parser.add_argument("--save_dir", type=str, default="../out", help="模型保存目录")
-@@ -88,40 +355,107 @@ if __name__ == "__main__":
+@@ -88,40 +460,110 @@ if __name__ == "__main__":
      parser.add_argument("--batch_size", type=int, default=32, help="batch size")
      parser.add_argument("--learning_rate", type=float, default=5e-4, help="初始学习率")
      parser.add_argument("--device", type=str, default="cuda:0" if torch.cuda.is_available() else "cpu", help="训练设备")
@@ -340,6 +445,9 @@ index 83a0382..2c410f6 100644
 +                        help="packed 模式下每多少比例的总步数存一次中间 checkpoint；0 表示只在终点存一次；终点必存")
 +    parser.add_argument('--keep_last_n', type=int, default=0,
 +                        help="packed 模式下最多保留多少个中途 checkpoint（0=全留；终点那个永不删除）")
++    parser.add_argument('--resume', default=0, type=int, choices=[0, 1],
++                        help="packed 模式下从 {save_dir}/{save_weight}_{hidden}_resume.pt 续训；"
++                             "该文件存 fp32 权重+optimizer+scaler+全部累计量，与 --save_steps_frac 的 fp16 推理 checkpoint 是两回事")
      args = parser.parse_args()
  
 +    # 参数区间校验：全部在这里硬崩，不做静默钳位，也不留到第一次前反向之后才炸。
@@ -417,7 +525,7 @@ index 83a0382..2c410f6 100644
      # ========== 4. 配wandb ==========
      wandb = None
      if args.use_wandb and is_main_process():
-@@ -130,14 +464,61 @@ if __name__ == "__main__":
+@@ -130,14 +572,61 @@ if __name__ == "__main__":
          resume = 'must' if wandb_id else None
          wandb_run_name = f"MiniMind-Pretrain-Epoch-{args.epochs}-BatchSize-{args.batch_size}-LearningRate-{args.learning_rate}"
          wandb.init(project=args.wandb_project, name=wandb_run_name, id=wandb_id, resume=resume)
@@ -485,7 +593,7 @@ index 83a0382..2c410f6 100644
      # ========== 6. 从ckp恢复状态 ==========
      start_epoch, start_step = 0, 0
      if ckp_data:
-@@ -146,28 +527,33 @@ if __name__ == "__main__":
+@@ -146,28 +635,33 @@ if __name__ == "__main__":
          scaler.load_state_dict(ckp_data['scaler'])
          start_epoch = ckp_data['epoch']
          start_step = ckp_data.get('step', 0)
