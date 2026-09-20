@@ -1,0 +1,202 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "从零预训练：我们的项目全流程",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "legend": {
+      "entries": {
+        "backend": {
+          "label": "计算步骤"
+        },
+        "database": {
+          "label": "数据与权重"
+        },
+        "messagebus": {
+          "label": "训练批次"
+        },
+        "frontend": {
+          "label": "评测结果"
+        }
+      }
+    }
+  },
+  "lanes": [
+    {
+      "id": "data",
+      "label": "文本与词表"
+    },
+    {
+      "id": "learn",
+      "label": "随机权重开始学习"
+    },
+    {
+      "id": "verify",
+      "label": "未见文本检验"
+    }
+  ],
+  "mainPath": [
+    "source",
+    "tokens",
+    "batch",
+    "train",
+    "save",
+    "eval"
+  ],
+  "nodes": [
+    {
+      "id": "source",
+      "lane": "data",
+      "col": 0,
+      "type": "database",
+      "label": "收集并划分文本",
+      "sublabel": "训练集与验证集去重隔离",
+      "tag": "已有数据；精确重叠已审计",
+      "width": 180
+    },
+    {
+      "id": "tokens",
+      "lane": "data",
+      "col": 1,
+      "type": "backend",
+      "label": "确定 tokenizer",
+      "sublabel": "把文字切成词元并编号",
+      "tag": "30M用原6.4K词表",
+      "width": 180
+    },
+    {
+      "id": "batch",
+      "lane": "data",
+      "col": 2,
+      "type": "messagebus",
+      "label": "构造输入和答案",
+      "sublabel": "截断、边界标记、补齐",
+      "tag": "每批8篇，每篇512位置",
+      "width": 180
+    },
+    {
+      "id": "init",
+      "lane": "learn",
+      "col": 1,
+      "type": "backend",
+      "label": "随机初始化参数",
+      "sublabel": "词向量 + 8层Transformer",
+      "tag": "30,025,216个参数",
+      "width": 180
+    },
+    {
+      "id": "train",
+      "lane": "learn",
+      "col": 2,
+      "type": "backend",
+      "label": "预测、反传、更新",
+      "sublabel": "每4批累积梯度更新一次",
+      "tag": "5,000批 → 1,250次更新",
+      "width": 180
+    },
+    {
+      "id": "save",
+      "lane": "learn",
+      "col": 3,
+      "type": "database",
+      "label": "保存训练状态",
+      "sublabel": "模型权重与续训文件",
+      "tag": "30M权重已保存",
+      "width": 180
+    },
+    {
+      "id": "holdout",
+      "lane": "verify",
+      "col": 0,
+      "type": "database",
+      "label": "冻结验证原文",
+      "sublabel": "1,943篇完整文档",
+      "tag": "只用来评分，不参与训练",
+      "width": 180
+    },
+    {
+      "id": "eval",
+      "lane": "verify",
+      "col": 3,
+      "type": "frontend",
+      "label": "评测并观察续写",
+      "sublabel": "已训练模型对照随机模型",
+      "tag": "BPB：3.423 → 1.819",
+      "width": 180
+    }
+  ],
+  "edges": [
+    {
+      "id": "s-t",
+      "from": "source",
+      "to": "tokens"
+    },
+    {
+      "id": "s-h",
+      "from": "source",
+      "to": "holdout",
+      "label": "留出",
+      "role": "branch"
+    },
+    {
+      "id": "t-b",
+      "from": "tokens",
+      "to": "batch"
+    },
+    {
+      "id": "i-tr",
+      "from": "init",
+      "to": "train",
+      "role": "branch"
+    },
+    {
+      "id": "b-tr",
+      "from": "batch",
+      "to": "train"
+    },
+    {
+      "id": "tr-s",
+      "from": "train",
+      "to": "save"
+    },
+    {
+      "id": "s-e",
+      "from": "save",
+      "to": "eval"
+    },
+    {
+      "id": "h-e",
+      "from": "holdout",
+      "to": "eval",
+      "label": "固定评分原文",
+      "role": "branch"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "已完成：30M从零预训练",
+      "items": [
+        "40,000篇；约814万有效监督token（含EOS）",
+        "独立验证BPB下降46.8%，尚不是聊天助手"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "已完成：下一轮的准备",
+      "items": [
+        "自训16K词表及同源6.4K对照，16K少15.4% token",
+        "64M两组仅短程联调通过，正式对照尚未开始"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "未开始：训练之后",
+      "items": [
+        "64M正式训练与评测 → SFT指令微调 → 量化部署",
+        "自训词表只看训练集；30M旧权重不能直接换词表"
+      ]
+    }
+  ]
+}

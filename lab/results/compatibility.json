@@ -1,0 +1,26 @@
+[
+  {
+    "arm": "A",
+    "parameters": 63912192,
+    "optimizer_steps": [
+      4
+    ],
+    "micro_batches": 8,
+    "strict_reload": true,
+    "post_reload_loss_finite": true,
+    "weight_sha256": "acd6b0fed5d313d416404d6e51c0caed2151fb004bb2e3f813bc3b6a20329096",
+    "purpose": "compatibility check only; not a trained quality baseline"
+  },
+  {
+    "arm": "B",
+    "parameters": 64205376,
+    "optimizer_steps": [
+      4
+    ],
+    "micro_batches": 8,
+    "strict_reload": true,
+    "post_reload_loss_finite": true,
+    "weight_sha256": "41336ec9c967aa8632bec5ea6cbfa2416eedbff07df83fa0d44d91db5649bd8c",
+    "purpose": "compatibility check only; not a trained quality baseline"
+  }
+]

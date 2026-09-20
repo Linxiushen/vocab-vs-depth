@@ -1,0 +1,112 @@
+{
+  "data_sha256": "cb27809ad175f7ce7153f850306ba17b3a82123b887b3b06af7878c7bcaf0e71",
+  "documents": 1943,
+  "max_seq_len": 512,
+  "tokenizers": [
+    {
+      "name": "official_6400",
+      "path": "/Users/leonskennedy/AI coding open/侧端大模型/minimind/model",
+      "vocab_size": 6400,
+      "tokenizer_sha256": "71f32c68cf63a15355a8fc171b7594b3d41870fe0ddb54fc6aefa55f73a4a668",
+      "groups": {
+        "all": {
+          "documents": 1943,
+          "chars": 784682,
+          "bytes": 1965240,
+          "tokens": 527624,
+          "chars_per_token": 1.4871992176246722,
+          "bytes_per_token": 3.7246978909223234
+        },
+        "contains_cjk": {
+          "documents": 1805,
+          "chars": 681800,
+          "bytes": 1862154,
+          "tokens": 491149,
+          "chars_per_token": 1.3881734463472388,
+          "bytes_per_token": 3.791423783821203
+        },
+        "no_cjk": {
+          "documents": 138,
+          "chars": 102882,
+          "bytes": 103086,
+          "tokens": 36475,
+          "chars_per_token": 2.820616860863605,
+          "bytes_per_token": 2.8262097326936257
+        }
+      },
+      "roundtrip_failures": 0,
+      "truncated_documents_at_seq_len": 131,
+      "padding_fraction_at_seq_len": 0.5425204258878024
+    },
+    {
+      "name": "matched_6400",
+      "path": "/Users/leonskennedy/AI coding open/侧端大模型/lab/tokenizers/bpe_6400",
+      "vocab_size": 6400,
+      "tokenizer_sha256": "cdd7e5bc16aa5081f00fbcff810c27de5b4971b0cba7bda970c873e31491cc9e",
+      "groups": {
+        "all": {
+          "documents": 1943,
+          "chars": 784682,
+          "bytes": 1965240,
+          "tokens": 488574,
+          "chars_per_token": 1.606065816027869,
+          "bytes_per_token": 4.0223998821058835
+        },
+        "contains_cjk": {
+          "documents": 1805,
+          "chars": 681800,
+          "bytes": 1862154,
+          "tokens": 445366,
+          "chars_per_token": 1.5308757291755546,
+          "bytes_per_token": 4.18117682984332
+        },
+        "no_cjk": {
+          "documents": 138,
+          "chars": 102882,
+          "bytes": 103086,
+          "tokens": 43208,
+          "chars_per_token": 2.3810868357711534,
+          "bytes_per_token": 2.385808183669691
+        }
+      },
+      "roundtrip_failures": 0,
+      "truncated_documents_at_seq_len": 143,
+      "padding_fraction_at_seq_len": 0.5714453728126608
+    },
+    {
+      "name": "matched_16384",
+      "path": "/Users/leonskennedy/AI coding open/侧端大模型/lab/tokenizers/bpe_16384",
+      "vocab_size": 16384,
+      "tokenizer_sha256": "ff99beb3a8ea206db443a3247229b637c16ba6d2faa0caab71f36dc925addfb8",
+      "groups": {
+        "all": {
+          "documents": 1943,
+          "chars": 784682,
+          "bytes": 1965240,
+          "tokens": 413143,
+          "chars_per_token": 1.899298790007334,
+          "bytes_per_token": 4.756803334438681
+        },
+        "contains_cjk": {
+          "documents": 1805,
+          "chars": 681800,
+          "bytes": 1862154,
+          "tokens": 377956,
+          "chars_per_token": 1.8039136830742202,
+          "bytes_per_token": 4.926906835716327
+        },
+        "no_cjk": {
+          "documents": 138,
+          "chars": 102882,
+          "bytes": 103086,
+          "tokens": 35187,
+          "chars_per_token": 2.923863927018501,
+          "bytes_per_token": 2.9296615227214597
+        }
+      },
+      "roundtrip_failures": 0,
+      "truncated_documents_at_seq_len": 104,
+      "padding_fraction_at_seq_len": 0.6269058800823469
+    }
+  ]
+}

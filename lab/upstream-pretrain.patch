@@ -1,0 +1,579 @@
+diff --git a/trainer/train_pretrain.py b/trainer/train_pretrain.py
+index 83a0382..2c410f6 100644
+--- a/trainer/train_pretrain.py
++++ b/trainer/train_pretrain.py
+@@ -6,20 +6,131 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+ 
+ import datasets  # noqa: F401  # Windows pyarrow/torch DLL conflict workaround (issue #771)
+ import argparse
++import hashlib
++import json
++import math
+ import time
+ import warnings
++from pathlib import Path
++
++import numpy as np
+ import torch
+ import torch.distributed as dist
+ from contextlib import nullcontext
+ from torch import optim, nn
+ from torch.nn.parallel import DistributedDataParallel
+-from torch.utils.data import DataLoader, DistributedSampler
++from torch.utils.data import DataLoader, Dataset, DistributedSampler
+ from model.model_minimind import MiniMindConfig
+ from dataset.lm_dataset import PretrainDataset
+-from trainer.trainer_utils import get_lr, Logger, is_main_process, lm_checkpoint, init_distributed_mode, setup_seed, init_model, SkipBatchSampler
++from trainer.trainer_utils import (get_lr, get_lr_wsd, flops_nominal_per_position, Logger,
++                                   is_main_process, lm_checkpoint, init_distributed_mode,
++                                   setup_seed, init_model, SkipBatchSampler)
+ 
+ warnings.filterwarnings('ignore')
+ 
++# --dtype accepts both the upstream spellings and short aliases (the lab side's
++# training command uses "bf16"). Any value outside this map is a hard error, not
++# a silent fallback to float16 (upstream's `... if args.dtype == "bfloat16" else
++# torch.float16` ternary would otherwise turn a typo into a silently wrong dtype).
++DTYPE_ALIASES = {
++    'bfloat16': torch.bfloat16, 'bf16': torch.bfloat16,
++    'float16': torch.float16, 'fp16': torch.float16,
++    'float32': torch.float32, 'fp32': torch.float32,
++}
++
++
++def sha256_file(path):
++    """Same digest lab/common.py::sha256_file computes, re-implemented here.
++
++    The patch cannot import from lab/ (it has to apply to and run inside a clean
++    minimind checkout), and this is the only place the trainer needs a file hash:
++    proving the tokenizer it was handed is the exact one the packed ids were
++    written with.
++    """
++    digest = hashlib.sha256()
++    with open(path, 'rb') as stream:
++        for chunk in iter(lambda: stream.read(1 << 20), b''):
++            digest.update(chunk)
++    return digest.hexdigest()
++
++
++class PackedSequenceDataset(Dataset):
++    """Reads padding-free, pre-packed training sequences (lab/pack_corpus.py, P1).
++
++    This is a minimal reader written from scratch for this patch, NOT an import of
++    lab/packed_dataset.py: that module belongs to a sibling task and its contract
++    can still change, whereas this patch must apply to and run against a clean
++    minimind checkout by itself. Duplicating ~15 lines here is cheaper than a
++    cross-repo dependency from inside the submodule out to lab/.
++
++    Expected files at ``prefix``:
++      <prefix>.ids.u16        memmap (n_seq, seq_len) uint16, no padding
++      <prefix>.bytes_cum.i64  memmap (n_seq,) int64, exact cumulative utf8 bytes of
++                              original text consumed through the end of sequence i
++      <prefix>.meta.json      {"n_seq": ..., "seq_len": ..., "vocab_size": ...}
++
++    __getitem__ returns the FULL seq_len ids as both input and label candidate
++    (labels are set to the same ids by the caller): MiniMindForCausalLM.forward
++    does logits[..., :-1] vs labels[..., 1:] internally (model_minimind.py ~L247),
++    so passing an already-shifted (x, y) pair here would shift twice.
++
++    bytes_delta is the exact count of original-text UTF-8 bytes this sequence
++    consumed, i.e. the bytes behind all seq_len of its tokens -- including the
++    first token, which is never a prediction target. So the ledger's
++    train_bits_per_byte divides by roughly 1/seq_len (0.2% at 512) more bytes than
++    it has targets for. Both arms use the same seq_len, so the bias is identical
++    on both sides of the comparison and the cross-arm delta stays symmetric; it is
++    written down here because neither the P2 contract nor 决策文档 §1.4(b) pins
++    the convention down, and eval-side BPB (lab/eval_bpb.py) does not share it.
++    """
++
++    def __init__(self, prefix):
++        meta_path = Path(f'{prefix}.meta.json')
++        ids_path = Path(f'{prefix}.ids.u16')
++        bytes_path = Path(f'{prefix}.bytes_cum.i64')
++        for path in (meta_path, ids_path, bytes_path):
++            if not path.is_file():
++                raise FileNotFoundError(f'packed file not found: {path}')
++        self.meta = json.loads(meta_path.read_text(encoding='utf-8'))
++        self.n_seq = int(self.meta['n_seq'])
++        self.seq_len = int(self.meta['seq_len'])
++        self.vocab_size = int(self.meta['vocab_size'])
++        if self.n_seq <= 0 or self.seq_len <= 0:
++            raise ValueError(f'invalid packed meta at {meta_path}: {self.meta}')
++        # np.memmap with an explicit shape only raises when the file is too SMALL
++        # for it; a file that is too LARGE is silently truncated to the shape. A
++        # stale meta.json (n_seq left over from an earlier, smaller pack) would
++        # therefore train on a silent prefix of the array whose bytes_cum no longer
++        # lines up, with no warning anywhere. Check both file sizes exactly.
++        actual_ids_bytes = ids_path.stat().st_size
++        expected_ids_bytes = self.n_seq * self.seq_len * 2
++        if actual_ids_bytes != expected_ids_bytes:
++            raise ValueError(
++                f'{ids_path} is {actual_ids_bytes} bytes, but {meta_path.name} says '
++                f'n_seq={self.n_seq} x seq_len={self.seq_len} x 2 = {expected_ids_bytes}: '
++                'stale meta.json, or a truncated / mismatched pack')
++        actual_cum_bytes = bytes_path.stat().st_size
++        expected_cum_bytes = self.n_seq * 8
++        if actual_cum_bytes != expected_cum_bytes:
++            raise ValueError(
++                f'{bytes_path} is {actual_cum_bytes} bytes, but n_seq={self.n_seq} x 8 = '
++                f'{expected_cum_bytes} was expected: stale meta.json, or a bad pack')
++        self.ids = np.memmap(ids_path, dtype=np.uint16, mode='r',
++                             shape=(self.n_seq, self.seq_len))
++        self.bytes_cum = np.memmap(bytes_path, dtype=np.int64, mode='r',
++                                   shape=(self.n_seq,))
++
++    def __len__(self):
++        return self.n_seq
++
++    def __getitem__(self, index):
++        if index < 0 or index >= self.n_seq:
++            raise IndexError(f'packed index {index} out of range [0, {self.n_seq})')
++        ids = torch.from_numpy(np.asarray(self.ids[index], dtype=np.int64))
++        prev = int(self.bytes_cum[index - 1]) if index > 0 else 0
++        bytes_delta = int(self.bytes_cum[index]) - prev
++        return ids, bytes_delta
++
+ 
+ def train_epoch(epoch, loader, iters, start_step=0, wandb=None):
+     start_time = time.time()
+@@ -80,6 +191,162 @@ def train_epoch(epoch, loader, iters, start_step=0, wandb=None):
+         optimizer.zero_grad(set_to_none=True)
+ 
+ 
++def train_packed(dataset, total_updates, tokens_per_update):
++    """Fixed-token-budget training loop over a padding-free packed dataset.
++
++    This intentionally does not reuse train_epoch above, because packed training
++    differs from it in every load-bearing way (决策文档 §1.3-1.5):
++      - stops at a token budget, not an epoch boundary. The caller has already
++        proven the packed corpus is large enough that this never repeats data;
++      - every one of the (seq_len-1) positions per sequence is a real supervised
++        target (packed sequences carry no padding), so there is no equivalent of
++        PretrainDataset's `labels[input_ids==pad_id]=-100` to apply;
++      - the LR schedule horizon is THIS run's own total_updates, either upstream's
++        no-warmup cosine or the WSD schedule of §1.4(a);
++      - it writes one lab/run_ledger.jsonl row per optimizer update (§1.4(b)).
++    """
++    targets_per_seq = dataset.seq_len - 1
++    if args.batch_size * targets_per_seq * args.accumulation_steps != tokens_per_update:
++        raise AssertionError('internal: tokens_per_update disagrees with batch/accumulation config')
++    flops_per_pos = flops_nominal_per_position(model, lm_config.num_hidden_layers,
++                                               lm_config.hidden_size, dataset.seq_len)
++    save_every = (max(1, math.ceil(args.save_steps_frac * total_updates))
++                 if args.save_steps_frac > 0 else total_updates)
++
++    ledger_path = None
++    if args.ledger:
++        ledger_path = Path(args.ledger)
++        ledger_path.parent.mkdir(parents=True, exist_ok=True)
++
++    seqs_needed = total_updates * args.batch_size * args.accumulation_steps
++    # Strictly sequential, deliberately NOT shuffled. pack_corpus.py already laid
++    # this stream out in the seed-42 doc_order that BOTH arms share (P1/D3), and
++    # 决策文档 §2.3 states "相同数据顺序" as a precondition of the main result.
++    # A torch.randperm(len(dataset)) here would draw from an arm-specific n_seq
++    # (1465 vs 1238 on a 4000-doc sample), so the same seed yields two unrelated
++    # permutations: at an equal-compute point the two arms would no longer be
++    # reading nested text but two disjoint random subsets, inflating sigma_d --
++    # the very quantity §2.3's MDE is built from. Sequential reading also keeps
++    # §2.1's R-byte lookup exact (bytes consumed == bytes_cum[seqs_consumed-1],
++    # asserted every update below) and keeps the 0.6-1.1 GB memmap a linear scan.
++    order = range(seqs_needed)
++
++    kept_checkpoints = []
++    seqs_consumed = tokens_cum = positions_cum = 0
++    text_targets_cum = structural_targets_cum = utf8_bytes_cum = 0
++    started = time.time()
++    cursor = 0
++    for update in range(1, total_updates + 1):
++        step0 = update - 1
++        if args.schedule == 'wsd':
++            lr = get_lr_wsd(step0, total_updates, args.learning_rate,
++                            args.warmup_frac, args.decay_frac, args.lr_floor)
++        else:
++            lr = get_lr(step0, total_updates, args.learning_rate)
++        for group in optimizer.param_groups:
++            group['lr'] = lr
++
++        update_nll = 0.0
++        update_targets = update_text_targets = update_structural_targets = 0
++        update_bytes = 0
++        for _ in range(args.accumulation_steps):
++            batch_idx = order[cursor:cursor + args.batch_size]
++            cursor += args.batch_size
++            items = [dataset[i] for i in batch_idx]
++            ids = torch.stack([item[0] for item in items]).to(args.device)
++            labels = ids  # model shifts internally; packed sequences have no padding to mask
++
++            with autocast_ctx:
++                res = model(ids, labels=labels)
++                loss = (res.loss + res.aux_loss) / args.accumulation_steps
++            scaler.scale(loss).backward()
++
++            n_targets = ids.shape[0] * targets_per_seq
++            struct = int(((labels[:, 1:] == lm_config.bos_token_id) |
++                         (labels[:, 1:] == lm_config.eos_token_id)).sum().item())
++            update_nll += res.loss.item() * n_targets
++            update_targets += n_targets
++            update_structural_targets += struct
++            update_text_targets += n_targets - struct
++            update_bytes += sum(item[1] for item in items)
++            seqs_consumed += ids.shape[0]
++            positions_cum += ids.shape[0] * dataset.seq_len
++
++        scaler.unscale_(optimizer)
++        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
++        scaler.step(optimizer)
++        scaler.update()
++        optimizer.zero_grad(set_to_none=True)
++
++        tokens_cum += update_targets
++        text_targets_cum += update_text_targets
++        structural_targets_cum += update_structural_targets
++        utf8_bytes_cum += update_bytes
++        if int(dataset.bytes_cum[seqs_consumed - 1]) != utf8_bytes_cum:
++            raise AssertionError(
++                f'update {update}: consumed {utf8_bytes_cum} utf8 bytes, but '
++                f'bytes_cum[{seqs_consumed - 1}]={int(dataset.bytes_cum[seqs_consumed - 1])}. '
++                'The packed stream must be walked strictly in order: 决策文档 §2.1 reads '
++                "the R-byte budget straight off bytes_cum, and §2.3's equal-compute claim "
++                'assumes both arms walked the same documents in the same order.')
++        flops_nominal_cum = positions_cum * flops_per_pos
++        wall_seconds_cum = time.time() - started
++        loss_nats_per_target = update_nll / update_targets
++        if update_bytes <= 0:
++            raise ValueError(f'update {update}: batch utf8 byte count is {update_bytes}')
++        train_bits_per_byte = (loss_nats_per_target * update_targets /
++                               (math.log(2) * update_bytes))
++        grad_norm = float(grad_norm)
++
++        if update % args.log_interval == 0 or update == total_updates:
++            Logger(f'update [{update}/{total_updates}] lr={lr:.8f} '
++                  f'loss_nats_per_target={loss_nats_per_target:.4f} bpb={train_bits_per_byte:.4f} '
++                  f'grad_norm={grad_norm:.4f} tokens_cum={tokens_cum}/{int(args.total_tokens)}')
++
++        if ledger_path is not None:
++            row = {
++                "step": update, "seqs_consumed": seqs_consumed,
++                "tokens_cum": tokens_cum, "targets_cum": tokens_cum,
++                "text_targets_cum": text_targets_cum,
++                "structural_targets_cum": structural_targets_cum,
++                "positions_cum": positions_cum, "utf8_bytes_cum": utf8_bytes_cum,
++                "flops_nominal_cum": flops_nominal_cum, "wall_seconds_cum": wall_seconds_cum,
++                "lr": lr, "grad_norm": grad_norm,
++                "loss_nats_per_target": loss_nats_per_target,
++                "train_bits_per_byte": train_bits_per_byte,
++            }
++            with open(ledger_path, 'a', encoding='utf-8') as stream:
++                stream.write(json.dumps(row) + '\n')
++
++        if (update % save_every == 0 or update == total_updates) and is_main_process():
++            model.eval()
++            moe_suffix = '_moe' if lm_config.use_moe else ''
++            ckp = f'{args.save_dir}/{args.save_weight}_{lm_config.hidden_size}{moe_suffix}_step{update:07d}.pth'
++            raw_model = model.module if isinstance(model, DistributedDataParallel) else model
++            raw_model = getattr(raw_model, '_orig_mod', raw_model)
++            state_dict = raw_model.state_dict()
++            # Write-then-rename, like upstream's lm_checkpoint: a 20-36 h rented-GPU
++            # run killed in the middle of torch.save would otherwise leave a
++            # half-written .pth under a completely normal-looking name.
++            torch.save({k: v.half().cpu() for k, v in state_dict.items()}, ckp + '.tmp')
++            os.replace(ckp + '.tmp', ckp)
++            model.train()
++            del state_dict
++            # 137.7 MB per arm-A checkpoint: R-main (7,338 updates) at
++            # --save_steps_frac 0.05 is 21 files = 2.9 GB per run, ~58 GB over the
++            # 20 runs of 决策文档 §2.1. --keep_last_n caps that. Default 0 keeps
++            # everything, because §2.2 evaluates intermediate checkpoints to draw
++            # the curve -- deleting them by default would silently destroy data the
++            # experiment plans to use. The final checkpoint is never pruned.
++            if update != total_updates:
++                kept_checkpoints.append(ckp)
++                while args.keep_last_n > 0 and len(kept_checkpoints) > args.keep_last_n:
++                    os.remove(kept_checkpoints.pop(0))
++
++    if cursor != seqs_needed:
++        raise AssertionError('internal: packed sequence cursor did not match the planned consumption')
++
++
+ if __name__ == "__main__":
+     parser = argparse.ArgumentParser(description="MiniMind Pretraining")
+     parser.add_argument("--save_dir", type=str, default="../out", help="模型保存目录")
+@@ -88,40 +355,107 @@ if __name__ == "__main__":
+     parser.add_argument("--batch_size", type=int, default=32, help="batch size")
+     parser.add_argument("--learning_rate", type=float, default=5e-4, help="初始学习率")
+     parser.add_argument("--device", type=str, default="cuda:0" if torch.cuda.is_available() else "cpu", help="训练设备")
+-    parser.add_argument("--dtype", type=str, default="bfloat16", help="混合精度类型")
++    parser.add_argument("--dtype", type=str, default="bfloat16",
++                        choices=sorted(DTYPE_ALIASES), help="混合精度类型")
+     parser.add_argument("--num_workers", type=int, default=8, help="数据加载线程数")
+     parser.add_argument("--accumulation_steps", type=int, default=8, help="梯度累积步数")
+     parser.add_argument("--grad_clip", type=float, default=1.0, help="梯度裁剪阈值")
+     parser.add_argument("--log_interval", type=int, default=100, help="日志打印间隔")
+-    parser.add_argument("--save_interval", type=int, default=1000, help="模型保存间隔")
++    parser.add_argument("--save_interval", type=int, default=1000, help="模型保存间隔（epoch 训练路径）")
+     parser.add_argument('--hidden_size', default=768, type=int, help="隐藏层维度")
+     parser.add_argument('--num_hidden_layers', default=8, type=int, help="隐藏层数量")
++    parser.add_argument('--vocab_size', default=6400, type=int, help="词表大小，必须与 tokenizer 一致")
++    parser.add_argument('--tokenizer_path', default='../model', help="本地 tokenizer 目录")
+     parser.add_argument('--max_seq_len', default=340, type=int, help="训练的最大截断长度（中文1token≈1.5~1.7字符）")
+     parser.add_argument('--use_moe', default=0, type=int, choices=[0, 1], help="是否使用MoE架构（0=否，1=是）")
+     parser.add_argument('--seed', default=42, type=int, help="随机种子（DDP下每个rank为seed+rank，每轮为seed+epoch）")
+-    parser.add_argument("--data_path", type=str, default="../dataset/pretrain_t2t_mini.jsonl", help="预训练数据路径")
++    parser.add_argument("--data_path", type=str, default="../dataset/pretrain_t2t_mini.jsonl", help="预训练数据路径（epoch 训练路径）")
+     parser.add_argument('--from_weight', default='none', type=str, help="基于哪个权重训练，为none则从头开始")
+-    parser.add_argument('--from_resume', default=0, type=int, choices=[0, 1], help="是否自动检测&续训（0=否，1=是）")
++    parser.add_argument('--from_resume', default=0, type=int, choices=[0, 1], help="是否自动检测&续训（0=否，1=是；--packed 不支持）")
+     parser.add_argument("--use_wandb", action="store_true", help="是否使用wandb")
+     parser.add_argument("--wandb_project", type=str, default="MiniMind-Pretrain", help="wandb项目名")
+     parser.add_argument("--use_compile", default=0, type=int, choices=[0, 1], help="是否使用torch.compile加速（0=否，1=是）")
++    parser.add_argument('--packed', default='', help="packed 数据前缀（如 .../packed_A），非空即启用固定 token 预算的 packing 训练路径（决策文档 §1.3-1.5）")
++    parser.add_argument('--total_tokens', type=float, default=0,
++                        help="packed 模式下的监督 token 预算；tokens/update = batch_size * (seq_len-1) * accumulation_steps，达到即停，不按 epoch")
++    parser.add_argument('--schedule', default=None, choices=['cosine', 'wsd'],
++                        help="学习率日程，仅 --packed 下生效且必须显式给出：cosine 是上游无 warmup 的原行为，wsd 见决策文档 §1.4(a)")
++    parser.add_argument('--warmup_frac', type=float, default=0.02, help="wsd：warmup 步数占本次 run 总步数的比例")
++    parser.add_argument('--decay_frac', type=float, default=0.10, help="wsd：decay 步数占本次 run 总步数的比例")
++    parser.add_argument('--lr_floor', type=float, default=0.1, help="wsd：decay 终点的 lr 相对初始 lr 的下限比例")
++    parser.add_argument('--ledger', default='', help="每次 optimizer update 追加一行 JSON 的记账文件路径（决策文档 §1.4(b)），仅 --packed 下生效")
++    parser.add_argument('--save_steps_frac', type=float, default=0.0,
++                        help="packed 模式下每多少比例的总步数存一次中间 checkpoint；0 表示只在终点存一次；终点必存")
++    parser.add_argument('--keep_last_n', type=int, default=0,
++                        help="packed 模式下最多保留多少个中途 checkpoint（0=全留；终点那个永不删除）")
+     args = parser.parse_args()
+ 
++    # 参数区间校验：全部在这里硬崩，不做静默钳位，也不留到第一次前反向之后才炸。
++    if args.log_interval < 1:
++        raise ValueError(f"--log_interval 必须 >= 1，收到 {args.log_interval}")
++    if args.packed:
++        if args.from_resume:
++            raise ValueError("--packed 训练路径尚不支持 --from_resume")
++        if args.total_tokens <= 0:
++            raise ValueError("--packed 需要 --total_tokens > 0")
++        if args.schedule is None:
++            raise ValueError(
++                "--packed 必须显式给出 --schedule {cosine,wsd}：决策文档 §1.4(a) 要求用 wsd "
++                "替换上游 t=0 就是满 lr 的无 warmup cosine，这个选择不能落在默认值上")
++        if not args.ledger:
++            raise ValueError(
++                "--packed 必须给出 --ledger：run_ledger.jsonl 是决策文档 §1.4(b) 点名必打的产物，"
++                "train_bits_per_byte 是训练期唯一跨臂可比的实时曲线")
++        if not 0 <= args.save_steps_frac <= 1:
++            raise ValueError(f"--save_steps_frac 必须落在 [0,1]，收到 {args.save_steps_frac}")
++        if args.keep_last_n < 0:
++            raise ValueError(f"--keep_last_n 必须 >= 0，收到 {args.keep_last_n}")
++        if args.schedule == 'wsd':
++            if not 0 < args.warmup_frac < 1:
++                raise ValueError(f"--warmup_frac 必须落在 (0,1)，收到 {args.warmup_frac}")
++            if not 0 < args.decay_frac < 1:
++                raise ValueError(f"--decay_frac 必须落在 (0,1)，收到 {args.decay_frac}")
++            if args.warmup_frac + args.decay_frac >= 1:
++                raise ValueError(
++                    f"--warmup_frac + --decay_frac 必须 < 1（否则 wsd 没有 stable 段），"
++                    f"收到 {args.warmup_frac} + {args.decay_frac}")
++            if not 0 < args.lr_floor <= 1:
++                raise ValueError(f"--lr_floor 必须落在 (0,1]，收到 {args.lr_floor}")
++    elif args.schedule is None:
++        args.schedule = 'cosine'  # epoch 路径只用上游 get_lr，这里只是让回显不出现 None
++
+     # ========== 1. 初始化环境和随机种子 ==========
+     local_rank = init_distributed_mode()
+     if dist.is_initialized(): args.device = f"cuda:{local_rank}"
+     setup_seed(args.seed + (dist.get_rank() if dist.is_initialized() else 0))
+-    
++    if args.packed and dist.is_initialized():
++        raise ValueError(
++            "--packed 暂不支持 DDP：train_packed 按固定顺序读 packed 流、不按 rank 分片，"
++            "每个 rank 会算出完全相同的 batch，DDP 梯度平均后等价于单卡（只是把同样的活干 "
++            "world_size 遍），run_ledger.jsonl 也会被 world_size 份重复行交错污染。"
++            "要支持需同时做：order 按 rank 切片、ledger 加 is_main_process() 守卫、"
++            "token/byte 统计 all_reduce。")
++
+     # ========== 2. 配置目录、模型参数、检查ckp ==========
+     os.makedirs(args.save_dir, exist_ok=True)
+-    lm_config = MiniMindConfig(hidden_size=args.hidden_size, num_hidden_layers=args.num_hidden_layers, use_moe=bool(args.use_moe))
++    lm_config = MiniMindConfig(hidden_size=args.hidden_size, num_hidden_layers=args.num_hidden_layers,
++                              vocab_size=args.vocab_size, use_moe=bool(args.use_moe))
+     ckp_data = lm_checkpoint(lm_config, weight=args.save_weight, save_dir='../checkpoints') if args.from_resume==1 else None
+-    
++
+     # ========== 3. 设置混合精度 ==========
+     device_type = "cuda" if "cuda" in args.device else "cpu"
+-    dtype = torch.bfloat16 if args.dtype == "bfloat16" else torch.float16
+-    autocast_ctx = nullcontext() if device_type == "cpu" else torch.cuda.amp.autocast(dtype=dtype)
+-    
++    dtype = DTYPE_ALIASES[args.dtype]
++    # mps/cpu keep upstream's behavior exactly: no autocast (nullcontext). On cuda,
++    # torch.autocast(device_type=...) replaces the deprecated torch.cuda.amp.autocast
++    # with the same effect for the same dtype.
++    autocast_ctx = nullcontext() if device_type == "cpu" else torch.autocast(device_type='cuda', dtype=dtype)
++    effective_dtype = 'float32' if device_type == 'cpu' else str(dtype).replace('torch.', '')
++    if device_type == 'cpu' and dtype != torch.float32:
++        Logger(f'注意：device={args.device} 上没有 autocast（走 nullcontext），--dtype {args.dtype} '
++              f'不生效，本次实际以 float32 计算。命令行回显里的 --dtype 不等于实际精度。')
++    Logger(f'precision: device_type={device_type} requested_dtype={args.dtype} '
++          f'effective_dtype={effective_dtype}')
++
+     # ========== 4. 配wandb ==========
+     wandb = None
+     if args.use_wandb and is_main_process():
+@@ -130,14 +464,61 @@ if __name__ == "__main__":
+         resume = 'must' if wandb_id else None
+         wandb_run_name = f"MiniMind-Pretrain-Epoch-{args.epochs}-BatchSize-{args.batch_size}-LearningRate-{args.learning_rate}"
+         wandb.init(project=args.wandb_project, name=wandb_run_name, id=wandb_id, resume=resume)
+-    
++
+     # ========== 5. 定义模型、数据、优化器 ==========
+-    model, tokenizer = init_model(lm_config, args.from_weight, device=args.device)
+-    train_ds = PretrainDataset(args.data_path, tokenizer, max_length=args.max_seq_len)
+-    train_sampler = DistributedSampler(train_ds) if dist.is_initialized() else None
+-    scaler = torch.cuda.amp.GradScaler(enabled=(args.dtype == 'float16'))
++    model, tokenizer = init_model(lm_config, args.from_weight, device=args.device,
++                                  tokenizer_path=args.tokenizer_path)
++    if len(tokenizer) != args.vocab_size:
++        raise ValueError(f"Tokenizer size {len(tokenizer)} != model vocab_size {args.vocab_size}")
++    if args.packed:
++        packed_ds = PackedSequenceDataset(args.packed)
++        if packed_ds.vocab_size != args.vocab_size:
++            raise ValueError(f"packed meta vocab_size {packed_ds.vocab_size} != --vocab_size {args.vocab_size}")
++        if packed_ds.seq_len != args.max_seq_len:
++            raise ValueError(f"packed meta seq_len {packed_ds.seq_len} != --max_seq_len {args.max_seq_len}")
++        # vocab_size alone does NOT identify a tokenizer: 上游 model/ 的官方 tokenizer
++        # (71f32c68…) 与 lab/tokenizers/bpe_6400 (cdd7e5bc…) 词表都是 6400，merges 却
++        # 完全不同。配错了照样跑完、照样 strict=True 能加载，只是输出是垃圾——决策文档
++        # 风险表 #4 点名"已实测存在此隐患"（30M smoke 权重就是这么错配的）。
++        expected_tok_sha = packed_ds.meta.get('tokenizer_sha256')
++        if not expected_tok_sha:
++            raise ValueError(
++                f"{args.packed}.meta.json 缺少 tokenizer_sha256，无法证明 --tokenizer_path 与打包时"
++                "用的是同一个 tokenizer；请用当前版本的 lab/pack_corpus.py 重新打包")
++        tokenizer_json = Path(args.tokenizer_path) / 'tokenizer.json'
++        if not tokenizer_json.is_file():
++            raise FileNotFoundError(f"找不到 {tokenizer_json}，无法校验 tokenizer 身份")
++        actual_tok_sha = sha256_file(tokenizer_json)
++        if actual_tok_sha != expected_tok_sha:
++            raise ValueError(
++                f"tokenizer 与 packed 数据不匹配：--tokenizer_path {args.tokenizer_path} 的 "
++                f"tokenizer.json sha256={actual_tok_sha}，而 {Path(args.packed).name}.meta.json "
++                f"记录的是 {expected_tok_sha}。两者 vocab_size 可能相同，embedding 形状也对得上，"
++                "但 id→文本的映射不同，训出来的权重是垃圾（决策文档 风险表 #4）。")
++        Logger(f'packed: {args.packed} n_seq={packed_ds.n_seq} seq_len={packed_ds.seq_len} '
++              f'tokenizer_sha256={actual_tok_sha[:16]}… doc_order_sha256='
++              f'{str(packed_ds.meta.get("doc_order_sha256"))[:16]}…')
++        targets_per_seq = packed_ds.seq_len - 1
++        tokens_per_update = args.batch_size * targets_per_seq * args.accumulation_steps
++        total_tokens = int(args.total_tokens)
++        total_updates = math.ceil(total_tokens / tokens_per_update)
++        if packed_ds.n_seq * targets_per_seq < total_tokens:
++            raise ValueError(
++                f"packed corpus too small for --total_tokens: n_seq*{targets_per_seq}="
++                f"{packed_ds.n_seq * targets_per_seq} < total_tokens={total_tokens}; "
++                "repeating an epoch is not allowed")
++        seqs_needed = total_updates * args.batch_size * args.accumulation_steps
++        if seqs_needed > packed_ds.n_seq:
++            raise ValueError(
++                f"packed corpus has {packed_ds.n_seq} sequences but this run needs "
++                f"{seqs_needed} (ceil(total_tokens/tokens_per_update) rounds up); "
++                "lower --total_tokens, raise batch/accumulation, or pack more data")
++    else:
++        train_ds = PretrainDataset(args.data_path, tokenizer, max_length=args.max_seq_len)
++        train_sampler = DistributedSampler(train_ds) if dist.is_initialized() else None
++    scaler = torch.cuda.amp.GradScaler(enabled=(dtype == torch.float16))
+     optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate)
+-    
++
+     # ========== 6. 从ckp恢复状态 ==========
+     start_epoch, start_step = 0, 0
+     if ckp_data:
+@@ -146,28 +527,33 @@ if __name__ == "__main__":
+         scaler.load_state_dict(ckp_data['scaler'])
+         start_epoch = ckp_data['epoch']
+         start_step = ckp_data.get('step', 0)
+-    
++
+     # ========== 7. 编译和分布式包装 ==========
+     if args.use_compile == 1:
+         model = torch.compile(model)
+         Logger('torch.compile enabled')
+     if dist.is_initialized():
+         model = DistributedDataParallel(model, device_ids=[local_rank])
+-    
++
+     # ========== 8. 开始训练 ==========
+-    for epoch in range(start_epoch, args.epochs):
+-        train_sampler and train_sampler.set_epoch(epoch)
+-        setup_seed(args.seed + epoch); indices = torch.randperm(len(train_ds)).tolist()
+-        skip = start_step if (epoch == start_epoch and start_step > 0) else 0
+-        batch_sampler = SkipBatchSampler(train_sampler or indices, args.batch_size, skip)
+-        loader = DataLoader(train_ds, batch_sampler=batch_sampler, num_workers=args.num_workers, pin_memory=True)
+-        if skip > 0: 
+-            Logger(f'Epoch [{epoch + 1}/{args.epochs}]: 跳过前{start_step}个step，从step {start_step + 1}开始')
+-            train_epoch(epoch, loader, len(loader) + skip, start_step, wandb)
+-        else:
+-            train_epoch(epoch, loader, len(loader), 0, wandb)
+-    
++    if args.packed:
++        Logger(f'packed run: total_updates={total_updates} tokens_per_update={tokens_per_update} '
++              f'total_tokens_requested={total_tokens} schedule={args.schedule}')
++        train_packed(packed_ds, total_updates, tokens_per_update)
++    else:
++        for epoch in range(start_epoch, args.epochs):
++            train_sampler and train_sampler.set_epoch(epoch)
++            setup_seed(args.seed + epoch); indices = torch.randperm(len(train_ds)).tolist()
++            skip = start_step if (epoch == start_epoch and start_step > 0) else 0
++            batch_sampler = SkipBatchSampler(train_sampler or indices, args.batch_size, skip)
++            loader = DataLoader(train_ds, batch_sampler=batch_sampler, num_workers=args.num_workers, pin_memory=True)
++            if skip > 0:
++                Logger(f'Epoch [{epoch + 1}/{args.epochs}]: 跳过前{start_step}个step，从step {start_step + 1}开始')
++                train_epoch(epoch, loader, len(loader) + skip, start_step, wandb)
++            else:
++                train_epoch(epoch, loader, len(loader), 0, wandb)
++
+     # ========== 9. 清理分布进程 ==========
+     if dist.is_initialized():
+         dist.barrier()
+-        dist.destroy_process_group()
+\ No newline at end of file
++        dist.destroy_process_group()
+diff --git a/trainer/trainer_utils.py b/trainer/trainer_utils.py
+index b6211d5..5536198 100644
+--- a/trainer/trainer_utils.py
++++ b/trainer/trainer_utils.py
+@@ -41,6 +41,37 @@ def get_lr(current_step, total_steps, lr):
+     return lr*(0.1 + 0.45*(1 + math.cos(math.pi * current_step / total_steps)))
+ 
+ 
++def get_lr_wsd(step, total, lr, warmup_frac=0.02, decay_frac=0.10, floor=0.1):
++    """Warmup-stable-decay schedule (决策文档 §1.4(a), transcribed verbatim).
++
++    get_lr above is upstream's no-warmup cosine: at step 0 it already returns full
++    lr, which is unsafe straight out of random init (决策文档 §1.1, "加 warmup").
++    `total` must be the CALLING run's own total optimizer-update count -- each run
++    anneals fully to its own budget, never to a horizon shared across runs.
++    """
++    w, d = max(int(warmup_frac*total), 1), max(int(decay_frac*total), 1)
++    if step < w:         return lr*(step+1)/w
++    if step < total-d:   return lr
++    p = (step-(total-d))/d
++    return lr*(floor+(1-floor)*0.5*(1+math.cos(math.pi*p)))
++
++
++def flops_nominal_per_position(model, num_hidden_layers, hidden_size, seq_len):
++    """Nominal forward+backward FLOPs for one sequence position (决策文档 §1.4(b)).
++
++    6*N (Kaplan et al. 2020) approximates the matmul FLOPs of all N parameters,
++    counting a tied lm_head/embedding only once -- `model.parameters()` already
++    dedupes shared tensors by identity, so plain numel() summation is correct.
++    The + 12*L*H*S term is the additional attention cost, using a nominal context
++    length S (this run's seq_len) rather than each position's true, growing
++    context -- hence "nominal", not exact. Verified against the decision doc's
++    own two pinned figures: A (vocab 6400, 8 layers, hidden 768) = 421.2M/position,
++    B (vocab 16384, 7 layers, hidden 768) = 418.3M/position, both at seq_len=512.
++    """
++    n_params = sum(p.numel() for p in model.parameters())
++    return 6 * n_params + 12 * num_hidden_layers * hidden_size * seq_len
++
++
+ def init_distributed_mode():
+     if int(os.environ.get("RANK", -1)) == -1:
+         return 0  # 非DDP模式

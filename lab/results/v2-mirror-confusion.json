@@ -1,0 +1,18 @@
+{
+  "protocol": "v2_mirror_confusion_evidence",
+  "val": "lab/data/v2/val.jsonl",
+  "val_sha256": "cb27809ad175f7ce7153f850306ba17b3a82123b887b3b06af7878c7bcaf0e71",
+  "max_seq_len": 512,
+  "window_tokens": 510,
+  "documents": 1943,
+  "tokenizer_a": "lab/tokenizers/bpe_6400",
+  "tokenizer_a_sha256": "cdd7e5bc16aa5081f00fbcff810c27de5b4971b0cba7bda970c873e31491cc9e",
+  "tokenizer_b": "lab/tokenizers/bpe_16384",
+  "tokenizer_b_sha256": "ff99beb3a8ea206db443a3247229b637c16ba6d2faa0caab71f36dc925addfb8",
+  "tokens_a": 488574,
+  "tokens_b": 413143,
+  "chunks_a": 2169,
+  "chunks_b": 2087,
+  "extra_chunks_a_minus_b": 82,
+  "extra_context_resets_pct_of_b": 3.92908481073311
+}

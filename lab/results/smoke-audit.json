@@ -1,0 +1,24 @@
+{
+  "parameters": 30025216,
+  "documents": 40000,
+  "sequence_length": 512,
+  "checkpoint_step": 5000,
+  "epoch_index": 0,
+  "micro_batches": 5000,
+  "optimizer_steps": [
+    1250
+  ],
+  "processed_positions_including_padding": 20480000,
+  "full_body_tokens_before_truncation": 8151357,
+  "supervised_body_tokens": 8101013,
+  "supervised_targets_including_eos": 8141013,
+  "padding_positions": 12298987,
+  "padding_fraction": 0.600536474609375,
+  "truncated_documents": 623,
+  "last_logged_microbatch_loss": 4.1856,
+  "last_20_logged_microbatch_mean_loss": 4.12085,
+  "weight_bytes": 66633364,
+  "weight_sha256": "7dccea03cfa241438f842443c6055b461ebb6ab8def17eed6c5732196874bdc0",
+  "log_sha256": "c63147bf200bf5857822d7e2499e1a4ffce5559e26e11941ff4450471240d4ce",
+  "timing_note": "Historical /tmp log creation to final write was about 119 minutes; active compute time was not recorded."
+}

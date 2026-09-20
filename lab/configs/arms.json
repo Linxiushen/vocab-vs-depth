@@ -1,0 +1,6 @@
+{
+  "A": {"tokenizer": "lab/tokenizers/bpe_6400", "vocab_size": 6400,
+        "hidden_size": 768, "num_hidden_layers": 8},
+  "B": {"tokenizer": "lab/tokenizers/bpe_16384", "vocab_size": 16384,
+        "hidden_size": 768, "num_hidden_layers": 7}
+}

@@ -1,0 +1,30 @@
+{
+  "protocol": "all_body_tokens_bos_per_chunk_v2",
+  "a": {
+    "path": "lab/results/random-eval-v2.json",
+    "bpb": 3.4230108498799563,
+    "weight_sha256": null,
+    "initialization": "random"
+  },
+  "b": {
+    "path": "lab/results/smoke-eval-v2.json",
+    "bpb": 1.8194357042894795,
+    "weight_sha256": "7dccea03cfa241438f842443c6055b461ebb6ab8def17eed6c5732196874bdc0",
+    "initialization": "checkpoint"
+  },
+  "documents": 1943,
+  "utf8_bytes": 1965240,
+  "bpb_difference_a_minus_b": 1.6035751455904768,
+  "bootstrap": {
+    "resamples": 2000,
+    "seed": 0,
+    "stderr": 0.012039295797809492,
+    "ci95_low": 1.5803061758406571,
+    "ci95_high": 1.627586735283892
+  },
+  "minimum_detectable_difference_2se": 0.024078591595618985,
+  "minimum_detectable_relative_to_b": 0.013234098648746745,
+  "excludes_zero": true,
+  "covers": "measurement noise on this fixed validation set only",
+  "does_not_cover": "seed-to-seed training variance; needs repeated training runs"
+}

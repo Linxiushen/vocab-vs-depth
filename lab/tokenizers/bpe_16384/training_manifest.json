@@ -1,0 +1,17 @@
+{
+  "vocab_size": 16384,
+  "data": "/Users/leonskennedy/AI coding open/侧端大模型/lab/data/v2/tokenizer_train.jsonl",
+  "data_sha256": "5629842312f58f3b2a4b7f80482614aa77de02f85afbd06a21c2920bd8bbbde1",
+  "documents": 300000,
+  "utf8_bytes": 287727252,
+  "reference_tokenizer_sha256": "71f32c68cf63a15355a8fc171b7594b3d41870fe0ddb54fc6aefa55f73a4a668",
+  "tokenizer_sha256": "ff99beb3a8ea206db443a3247229b637c16ba6d2faa0caab71f36dc925addfb8",
+  "pre_tokenizer": {
+    "type": "ByteLevel",
+    "add_prefix_space": false,
+    "trim_offsets": true,
+    "use_regex": true
+  },
+  "elapsed_seconds": 626.6421264999663,
+  "gguf_export": "not tested"
+}

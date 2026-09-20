@@ -1,0 +1,22 @@
+{
+  "seed": 42,
+  "source": "/Users/leonskennedy/AI coding open/侧端大模型/minimind/dataset/pretrain_t2t_mini.jsonl",
+  "source_sha256": "6dd6716c84ab36897bdbfc7f88e04f4441c48c1ab7ecee88ce0b0e7d4685560c",
+  "previous_holdout_sha256": "6f7862c98a049e2226c3667f2b7a69d05e1bdb414063b06a87c723ffbbfd44dd",
+  "smoke_train_sha256": "941e42117752d8bcd8906be115b4eac386059912c8e4baf47d9464524e158544",
+  "previous_holdout_rows": 2000,
+  "previous_holdout_rows_seen_by_smoke": 57,
+  "train_rows": 1268294,
+  "heldout_source_rows": 1944,
+  "val_unique_documents": 1943,
+  "tokenizer_sample_rows": 300000,
+  "tokenizer_sample_unique_documents": 299993,
+  "exact_content_overlap_train_val": 0,
+  "exact_content_overlap_smoke_val": 0,
+  "near_duplicate_check": "not performed",
+  "files": {
+    "train.jsonl": "1b4b5cbf493b56e4aa14d194d98755778ed97e71ad4bebf147ec2e39d1fe4a1a",
+    "val.jsonl": "cb27809ad175f7ce7153f850306ba17b3a82123b887b3b06af7878c7bcaf0e71",
+    "tokenizer_train.jsonl": "5629842312f58f3b2a4b7f80482614aa77de02f85afbd06a21c2920bd8bbbde1"
+  }
+}

@@ -1,0 +1,283 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "放大训练循环：每一批在做什么",
+    "locale": "zh-CN",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "input",
+      "label": "准备输入与答案"
+    },
+    {
+      "id": "compute",
+      "label": "计算预测与梯度"
+    },
+    {
+      "id": "update",
+      "label": "更新与继续训练"
+    },
+    {
+      "id": "finish",
+      "label": "结束与保存"
+    }
+  ],
+  "phases": [
+    {
+      "id": "read",
+      "label": "① 把文本变成数字",
+      "fromCol": 0,
+      "toCol": 1
+    },
+    {
+      "id": "predict",
+      "label": "② 预测下一个token",
+      "fromCol": 2,
+      "toCol": 3,
+      "variant": "emphasis"
+    },
+    {
+      "id": "gradient",
+      "label": "③ 累积梯度",
+      "fromCol": 4,
+      "toCol": 5
+    }
+  ],
+  "mainPath": [
+    "take",
+    "encode",
+    "pad",
+    "forward",
+    "loss",
+    "backward",
+    "accumulate",
+    "optimizer",
+    "remaining",
+    "checkpoint"
+  ],
+  "nodes": [
+    {
+      "id": "take",
+      "lane": "input",
+      "col": 0,
+      "type": "database",
+      "label": "取8篇文本",
+      "sublabel": "每轮打乱顺序",
+      "tag": "一个micro-batch",
+      "width": 150
+    },
+    {
+      "id": "encode",
+      "lane": "input",
+      "col": 1,
+      "type": "backend",
+      "label": "文字转 token ID",
+      "sublabel": "固定6.4K词表",
+      "tag": "文字 → 整数序列",
+      "width": 150
+    },
+    {
+      "id": "pad",
+      "lane": "input",
+      "col": 2,
+      "type": "messagebus",
+      "label": "加边界并补齐",
+      "sublabel": "BOS / EOS / pad",
+      "tag": "input_ids：[8, 512]",
+      "width": 150
+    },
+    {
+      "id": "targets",
+      "lane": "input",
+      "col": 3,
+      "type": "database",
+      "label": "准备正确答案",
+      "sublabel": "复制输入，pad=-100",
+      "tag": "labels：下一位置",
+      "width": 150
+    },
+    {
+      "id": "forward",
+      "lane": "compute",
+      "col": 2,
+      "type": "backend",
+      "label": "模型前向预测",
+      "sublabel": "词向量 → 8层 → 分数",
+      "tag": "[8, 512, 6400]",
+      "width": 150
+    },
+    {
+      "id": "loss",
+      "lane": "compute",
+      "col": 3,
+      "type": "backend",
+      "label": "计算预测误差",
+      "sublabel": "位置t预测t+1",
+      "tag": "交叉熵；忽略pad",
+      "width": 150
+    },
+    {
+      "id": "backward",
+      "lane": "compute",
+      "col": 4,
+      "type": "backend",
+      "label": "反向传播",
+      "sublabel": "loss / 4 → 梯度",
+      "tag": "梯度累加到参数上",
+      "width": 150
+    },
+    {
+      "id": "accumulate",
+      "lane": "update",
+      "col": 4,
+      "type": "backend",
+      "label": "累计满4批？",
+      "sublabel": "accumulation = 4",
+      "tag": "每4批更新一次",
+      "width": 150
+    },
+    {
+      "id": "optimizer",
+      "lane": "compute",
+      "col": 5,
+      "type": "backend",
+      "label": "更新并清空梯度",
+      "sublabel": "裁剪 → AdamW → 清零",
+      "tag": "真正改变模型权重",
+      "width": 150
+    },
+    {
+      "id": "remaining",
+      "lane": "update",
+      "col": 5,
+      "type": "backend",
+      "label": "还有下一批？",
+      "sublabel": "本次共5,000批",
+      "tag": "有：继续取样",
+      "width": 150
+    },
+    {
+      "id": "checkpoint",
+      "lane": "finish",
+      "col": 5,
+      "type": "database",
+      "label": "结束并保存",
+      "sublabel": "权重 / 优化器 / 进度",
+      "tag": "总计1,250次更新",
+      "width": 150
+    }
+  ],
+  "edges": [
+    {
+      "id": "take-encode",
+      "from": "take",
+      "to": "encode"
+    },
+    {
+      "id": "encode-pad",
+      "from": "encode",
+      "to": "pad"
+    },
+    {
+      "id": "pad-targets",
+      "from": "pad",
+      "to": "targets",
+      "label": "复制",
+      "role": "branch"
+    },
+    {
+      "id": "pad-forward",
+      "from": "pad",
+      "to": "forward",
+      "label": "输入"
+    },
+    {
+      "id": "forward-loss",
+      "from": "forward",
+      "to": "loss",
+      "label": "预测分数"
+    },
+    {
+      "id": "targets-loss",
+      "from": "targets",
+      "to": "loss",
+      "label": "正确答案",
+      "role": "branch"
+    },
+    {
+      "id": "loss-backward",
+      "from": "loss",
+      "to": "backward",
+      "variant": "emphasis"
+    },
+    {
+      "id": "backward-accum",
+      "from": "backward",
+      "to": "accumulate"
+    },
+    {
+      "id": "accum-update",
+      "from": "accumulate",
+      "to": "optimizer",
+      "label": "已满4批",
+      "route": "drop",
+      "variant": "emphasis"
+    },
+    {
+      "id": "accum-next",
+      "from": "accumulate",
+      "to": "take",
+      "label": "未满：保留梯度取下一批",
+      "role": "return",
+      "variant": "dashed",
+      "route": "return-left"
+    },
+    {
+      "id": "remain-next",
+      "from": "remaining",
+      "to": "take",
+      "label": "有：继续",
+      "role": "return",
+      "variant": "dashed"
+    },
+    {
+      "id": "remain-done",
+      "from": "remaining",
+      "to": "checkpoint",
+      "label": "无：结束"
+    },
+    {
+      "id": "update-remain",
+      "from": "optimizer",
+      "to": "remaining"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "训练目标：猜下一个token",
+      "items": [
+        "输入“学习 语言 模型”，依次预测后一个词元",
+        "因果注意力只看前文；labels在loss计算时错开一位"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "5,000批 ≠ 5,000次更新",
+      "items": [
+        "8篇/批 × 4批累积 = 每次更新汇总32篇",
+        "本次共1,250次更新；padding不计入交叉熵"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "保存与结束条件",
+      "items": [
+        "实际脚本还在第2,000和4,000批定期保存",
+        "本次批数能整除4；不满4批的尾组需另做收尾更新"
+      ]
+    }
+  ]
+}

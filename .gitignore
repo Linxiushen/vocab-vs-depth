@@ -1,0 +1,45 @@
+# Python environment
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Raw and derived training data (CC BY-NC upstream; never redistributed here).
+# File-level patterns, not directory-level, so the hash manifest can be re-included.
+minimind/dataset/*.jsonl
+lab/data/**/*.jsonl
+lab/data/**/*.u16
+lab/data/**/*.i64
+lab/data/**/*.i32
+lab/data/**/*.npy
+!lab/data/v3/val_manifest.jsonl
+
+# Model weights and optimizer state (published separately on Hugging Face)
+minimind/out/
+minimind/checkpoints/
+lab/runs/**/weights/
+lab/runs/**/checkpoints/
+lab/runs/**/input.jsonl
+
+# Self-test and link-check runs: throwaway inputs, not reproducible, not results.
+# Real experiment runs are tracked -- their run_ledger.jsonl IS the record.
+lab/runs/selftest-*/
+lab/runs/check-*/
+*.pth
+*.safetensors
+*.gguf
+
+# Third-party tooling lives outside the repo (see THIRD_PARTY.md)
+lab/tools/
+
+# Diagram render artifacts (keep the HTML/MD, drop screenshots and receipts)
+lab/diagrams/*.png
+lab/diagrams/*.visual-check.*
+lab/diagrams/delivery-receipt.json
+lab/diagrams/supplemental-browser.json
+lab/diagrams/check-browser.mjs
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

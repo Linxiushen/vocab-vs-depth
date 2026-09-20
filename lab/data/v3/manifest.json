@@ -1,0 +1,58 @@
+{
+  "created_at": "2026-09-18T12:50:59.008233+00:00",
+  "method": "sha256(text) hex-ascending sort over lab/data/v2/train.jsonl; take the smallest (target - old_val_rows) unique content hashes not already present in lab/data/v2/val.jsonl; union with old val kept first, in its original order; all lines whose content hash is selected (all occurrences, in case of duplicate lines) are removed from train",
+  "inputs": {
+    "train_path": "lab/data/v2/train.jsonl",
+    "train_sha256": "1b4b5cbf493b56e4aa14d194d98755778ed97e71ad4bebf147ec2e39d1fe4a1a",
+    "old_val_path": "lab/data/v2/val.jsonl",
+    "old_val_sha256": "cb27809ad175f7ce7153f850306ba17b3a82123b887b3b06af7878c7bcaf0e71",
+    "upstream_source": "/Users/leonskennedy/AI coding open/侧端大模型/minimind/dataset/pretrain_t2t_mini.jsonl",
+    "upstream_source_sha256": "6dd6716c84ab36897bdbfc7f88e04f4441c48c1ab7ecee88ce0b0e7d4685560c"
+  },
+  "seed": 42,
+  "seed_note": "recorded for manifest-schema parity with lab/data/v2/manifest.json; selection itself is a deterministic content-hash sort and does not consume this value -- there is no RNG in this script",
+  "target": 20000,
+  "old_val_rows": 1924,
+  "new_from_train_rows": 17942,
+  "historical_prefix_len": 1924,
+  "historical_prefix_note": "val_large.jsonl rows [0, historical_prefix_len) are the surviving v2 val documents, in v2 order. Slice with this field, never with a hard-coded 1943: neardup_audit.py --apply may remove some of them and updates it.",
+  "val_large_rows": 19866,
+  "train_rows_before": 1268294,
+  "train_rows_after": 1250235,
+  "train_rows_dropped": 18059,
+  "train_duplicate_lines_observed": 190,
+  "old_val_hashes_found_inside_train_and_stripped": 0,
+  "exact_content_overlap_train_val": 0,
+  "val_large_internal_duplicates": 0,
+  "near_duplicate_check": [
+    {
+      "applied_at": "2026-09-18T20:52:50+0800",
+      "method": "containment_window_coverage",
+      "criterion": "flag a val document when some train document covers >= 0.5 of its characters with non-template windows (>= min(3, n_windows) distinct hashes), or reproduces >= 0.98 of it verbatim",
+      "window": 64,
+      "stride": 32,
+      "min_hits": 3,
+      "min_coverage": 0.5,
+      "full_containment": 0.98,
+      "max_doc_freq": 100,
+      "hash": "blake2b digest_size=8",
+      "train_lines_scanned": 1250235,
+      "val_rows_before": 20000,
+      "val_rows_after": 19866,
+      "hit_val_documents_removed": 134,
+      "historical_prefix_removed": 19,
+      "hit_rate": 0.0067,
+      "report": "lab/data/v3/neardup_report.json"
+    }
+  ],
+  "frozen": true,
+  "files": {
+    "val_large.jsonl": "bac92439dfbad231c0381e72c42ef86d3d0cc073748b20c6ec0d460817e3eef1",
+    "train.jsonl": "8513a4d1b5e3630e27e740c0d06cd044d580490c546018db53153534b312dd73",
+    "val_manifest.jsonl": "e7b050d0665faeafd10a2d5fd4ec641f69b0ca43587586d13393f5b4a1ae1008"
+  },
+  "near_duplicate_removed_cumulative": 134,
+  "old_val_rows_before": 1943,
+  "old_val_removed": 19,
+  "frozen_reason": "near-duplicate audit applied; rebuilding this directory would discard the audit and change val_large.jsonl under downstream eval artifacts"
+}

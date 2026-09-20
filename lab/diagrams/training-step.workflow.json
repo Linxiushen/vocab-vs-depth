@@ -1,0 +1,207 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "拆开一批训练：模型怎样学会预测",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "legend": {
+      "entries": {
+        "backend": {
+          "label": "计算步骤"
+        },
+        "database": {
+          "label": "数据与权重"
+        },
+        "messagebus": {
+          "label": "训练批次"
+        },
+        "frontend": {
+          "label": "评测结果"
+        }
+      }
+    }
+  },
+  "lanes": [
+    {
+      "id": "input",
+      "label": "读文本并计算误差"
+    },
+    {
+      "id": "grad",
+      "label": "计算梯度"
+    },
+    {
+      "id": "update",
+      "label": "条件更新与循环"
+    },
+    {
+      "id": "end",
+      "label": "结束"
+    }
+  ],
+  "mainPath": [
+    "read",
+    "encode",
+    "forward",
+    "loss",
+    "back",
+    "gate",
+    "next",
+    "save"
+  ],
+  "nodes": [
+    {
+      "id": "read",
+      "lane": "input",
+      "col": 0,
+      "type": "database",
+      "label": "取8篇文本",
+      "sublabel": "从40,000篇中分批读取",
+      "tag": "一批叫micro-batch",
+      "width": 160
+    },
+    {
+      "id": "encode",
+      "lane": "input",
+      "col": 1,
+      "type": "messagebus",
+      "label": "构造ID与标签",
+      "sublabel": "BOS + 正文 + EOS + pad",
+      "tag": "512位置；pad标签=-100",
+      "width": 168
+    },
+    {
+      "id": "forward",
+      "lane": "input",
+      "col": 2,
+      "type": "backend",
+      "label": "前向预测",
+      "sublabel": "词向量 → 8层 → 预测分数",
+      "tag": "输出：[8, 512, 6400]",
+      "width": 170
+    },
+    {
+      "id": "loss",
+      "lane": "input",
+      "col": 3,
+      "type": "backend",
+      "label": "交叉熵 loss",
+      "sublabel": "位置t的分数预测位置t+1",
+      "tag": "正确答案就是原文后一个token",
+      "width": 190
+    },
+    {
+      "id": "back",
+      "lane": "grad",
+      "col": 3,
+      "type": "backend",
+      "label": "反向传播",
+      "sublabel": "loss除以4后计算梯度",
+      "tag": "梯度累加，尚未更新权重",
+      "width": 190
+    },
+    {
+      "id": "gate",
+      "lane": "update",
+      "col": 3,
+      "type": "backend",
+      "label": "累计满4批才更新",
+      "sublabel": "满：裁剪 → AdamW → 清零",
+      "tag": "未满：保留梯度，不更新",
+      "width": 190
+    },
+    {
+      "id": "next",
+      "lane": "update",
+      "col": 4,
+      "type": "backend",
+      "label": "还有下一批？",
+      "sublabel": "本次总共5,000批",
+      "tag": "继续，或结束训练",
+      "width": 160
+    },
+    {
+      "id": "save",
+      "lane": "end",
+      "col": 4,
+      "type": "database",
+      "label": "结束并保存",
+      "sublabel": "总计1,250次参数更新",
+      "tag": "写入权重与续训状态",
+      "width": 160
+    }
+  ],
+  "edges": [
+    {
+      "id": "r-e",
+      "from": "read",
+      "to": "encode"
+    },
+    {
+      "id": "e-f",
+      "from": "encode",
+      "to": "forward"
+    },
+    {
+      "id": "f-l",
+      "from": "forward",
+      "to": "loss"
+    },
+    {
+      "id": "l-b",
+      "from": "loss",
+      "to": "back"
+    },
+    {
+      "id": "b-g",
+      "from": "back",
+      "to": "gate"
+    },
+    {
+      "id": "g-n",
+      "from": "gate",
+      "to": "next"
+    },
+    {
+      "id": "n-r",
+      "from": "next",
+      "to": "read",
+      "label": "有：取下一批",
+      "role": "return",
+      "variant": "dashed"
+    },
+    {
+      "id": "n-s",
+      "from": "next",
+      "to": "save",
+      "label": "无：结束"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "答案不需要人工逐条标注",
+      "items": [
+        "labels复制输入，在计算loss时与预测错开一位",
+        "因果注意力只看前文；padding不参与交叉熵"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "4批梯度 → 1次更新",
+      "items": [
+        "8篇/批 × 4批累积 = 每次更新汇总32篇",
+        "AdamW用梯度和历史状态改变模型参数"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "按这次30M运行绘制",
+      "items": [
+        "学习率逐批余弦下降；第2,000、4,000批也保存",
+        "5,000能整除4；其他批数需处理不足4批的尾组"
+      ]
+    }
+  ]
+}

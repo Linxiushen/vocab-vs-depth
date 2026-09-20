@@ -1,0 +1,35 @@
+{
+  "val": "lab/data/v3/val_large.jsonl",
+  "val_sha256": "bac92439dfbad231c0381e72c42ef86d3d0cc073748b20c6ec0d460817e3eef1",
+  "tokenizer_a": "lab/tokenizers/bpe_6400",
+  "tokenizer_a_sha256": "cdd7e5bc16aa5081f00fbcff810c27de5b4971b0cba7bda970c873e31491cc9e",
+  "tokenizer_b": "lab/tokenizers/bpe_16384",
+  "tokenizer_b_sha256": "ff99beb3a8ea206db443a3247229b637c16ba6d2faa0caab71f36dc925addfb8",
+  "budget": 510,
+  "documents": 19866,
+  "chunks": 21915,
+  "total_utf8_bytes": 19202025,
+  "a_tokens_per_chunk": {
+    "min": 1,
+    "mean": 218.82851927903263,
+    "max": 510
+  },
+  "b_tokens_per_chunk": {
+    "min": 1,
+    "mean": 184.91508099475246,
+    "max": 484
+  },
+  "a_tokens_sum_per_chunk": 4795627,
+  "a_tokens_whole_doc": 4795628,
+  "b_tokens_sum_per_chunk": 4052414,
+  "b_tokens_whole_doc": 4052104,
+  "residual_boundary_token_overhead": {
+    "a": -1,
+    "b": 310,
+    "a_pct_of_whole_doc": -2.085232632722972e-05,
+    "b_pct_of_whole_doc": 0.007650346585378855,
+    "note": "chunk boundaries are A's own token boundaries, so A's per-chunk sum matches its whole-document count up to BPE non-monotonicity (a token either way), while B restarts mid-token at every cut and pays a small positive overhead; this is the residual, A-favouring asymmetry v3 does NOT remove -- report it next to any headline BPB difference"
+  },
+  "out": "lab/data/v3/eval_chunks_v3.jsonl",
+  "out_sha256": "51dc06f74152d687dbc527348d2a58c9e04c1222be5d8bca595a221795ea4ed0"
+}
