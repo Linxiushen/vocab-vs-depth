@@ -25,6 +25,7 @@ lab/runs/**/input.jsonl
 # Real experiment runs are tracked -- their run_ledger.jsonl IS the record.
 lab/runs/selftest-*/
 lab/runs/check-*/
+lab/runs/probe-*/
 *.pth
 *.safetensors
 *.gguf

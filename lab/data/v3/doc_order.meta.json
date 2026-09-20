@@ -1,0 +1,9 @@
+{
+  "seed": 42,
+  "n_docs": 1250235,
+  "seq_len": 512,
+  "train_sha256": "8513a4d1b5e3630e27e740c0d06cd044d580490c546018db53153534b312dd73",
+  "train_path": "lab/data/v3/train.jsonl",
+  "doc_order_sha256": "7d204f346dc1568078db2cf1c4f1314737e626da1c72c746a3ea782c604f32ad",
+  "numpy_version": "1.26.4"
+}

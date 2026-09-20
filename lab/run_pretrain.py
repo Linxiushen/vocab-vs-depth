@@ -113,7 +113,12 @@ if __name__ == "__main__":
     if profile == "pack":
         if args.total_tokens is None or args.total_tokens <= 0:
             parser.error("--profile pack requires --total_tokens > 0")
-        prefix = Path(args.packed) if args.packed else ROOT / f"lab/data/v3/packed_{args.arm}"
+        # Resolved to an absolute path because the trainer subprocess runs with
+        # cwd=work/, not the project root. A relative --packed passed straight
+        # through would pass the launcher's own is_file() check here and then
+        # fail inside the child with FileNotFoundError after the model was built.
+        prefix = (Path(args.packed).resolve() if args.packed
+                  else ROOT / f"lab/data/v3/packed_{args.arm}")
         meta_path = Path(f"{prefix}.meta.json")
         if not meta_path.is_file():
             parser.error(f"packed data missing, run lab/pack_corpus.py --arm {args.arm} first: {meta_path}")

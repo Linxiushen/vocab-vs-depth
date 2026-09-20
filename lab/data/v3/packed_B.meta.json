@@ -1,0 +1,31 @@
+{
+  "arm": "B",
+  "tokenizer_sha256": "ff99beb3a8ea206db443a3247229b637c16ba6d2faa0caab71f36dc925addfb8",
+  "vocab_size": 16384,
+  "n_seq": 500251,
+  "seq_len": 512,
+  "bos_id": 1,
+  "eos_id": 2,
+  "total_tokens": 256128512,
+  "text_tokens": 253628045,
+  "structural_tokens": 2500467,
+  "total_utf8_bytes": 1201358545,
+  "consumed_utf8_bytes": 1201357651,
+  "bytes_per_token": 4.690448718961831,
+  "ids_sha256": "2baaecd89d335c9fec0550510f9ecbf80feb8633d029594dbeaf6503aeb65edf",
+  "doc_order_sha256": "7d204f346dc1568078db2cf1c4f1314737e626da1c72c746a3ea782c604f32ad",
+  "dropped_tail_tokens": 225,
+  "elapsed_seconds": 139.98565800010692,
+  "n_docs": 1250235,
+  "max_docs": null,
+  "seed": 42,
+  "train_path": "lab/data/v3/train.jsonl",
+  "train_sha256": "8513a4d1b5e3630e27e740c0d06cd044d580490c546018db53153534b312dd73",
+  "endoftext_literal_hits": 0,
+  "full_corpus_token_check": {
+    "reference_tokens": 255000000,
+    "total_tokens": 256128512,
+    "relative_diff": 0.004425537254901961,
+    "tolerance": 0.01
+  }
+}
