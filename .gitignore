@@ -44,3 +44,11 @@ lab/diagrams/check-browser.mjs
 .DS_Store
 .idea/
 .vscode/
+
+# Local scratch: SQLite cache, not part of the experiment record
+cache/
+
+# Undisclosed security findings for OTHER projects, staged here only so the
+# account owner can file them privately. THIS REPO IS PUBLIC — committing these
+# would publish an unpatched vulnerability. Never remove this rule.
+security-reports/

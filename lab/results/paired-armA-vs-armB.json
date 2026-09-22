@@ -1,0 +1,30 @@
+{
+  "protocol": "common_text_chunks_bos_per_chunk_v3",
+  "a": {
+    "path": "lab/results/armA-T120M-eval-v3.json",
+    "bpb": 0.8587901885002458,
+    "weight_sha256": "97b5d1dbf7c65994a188dbc31b52e848a70996c5f2a1083c190633e5ac1924a7",
+    "initialization": "checkpoint"
+  },
+  "b": {
+    "path": "lab/results/armB-T120M-eval-v3.json",
+    "bpb": 0.8524499565038756,
+    "weight_sha256": "72d55ddb25772711ef0932ee893b6b3360333e08b5067c099d599ab06bab8cf1",
+    "initialization": "checkpoint"
+  },
+  "documents": 19866,
+  "utf8_bytes": 19202025,
+  "bpb_difference_a_minus_b": 0.006340231996370238,
+  "bootstrap": {
+    "resamples": 10000,
+    "seed": 0,
+    "stderr": 0.0001953579410004408,
+    "ci95_low": 0.005959233892568805,
+    "ci95_high": 0.006715994643518686
+  },
+  "minimum_detectable_difference_2se": 0.0003907158820008816,
+  "minimum_detectable_relative_to_b": 0.00045834465591776386,
+  "excludes_zero": true,
+  "covers": "measurement noise on this fixed validation set only",
+  "does_not_cover": "seed-to-seed training variance; needs repeated training runs"
+}
